@@ -1,3 +1,6 @@
 # obscura
 
-[Edit in StackBlitz next generation editor ⚡️](https://stackblitz.com/~/github.com/mchkbalaji/obscura)
+github.com/mchkbalaji/obscura
+
+(https://project-obscura.netlify.app/)
+
