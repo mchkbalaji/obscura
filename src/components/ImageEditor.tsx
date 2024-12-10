@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Download } from 'lucide-react';
-import { detectFaces } from '../utils/faceDetection';
+import { detectFaces, getExtendedForeheadPoints } from '../utils/faceDetection';
 import { applyBlur, drawFaceOutline } from '../utils/canvas';
 import * as faceapi from 'face-api.js';
 import { useCanvas } from '../hooks/useCanvas';
@@ -16,6 +16,20 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({ image }) => {
   const { setupCanvas, getScaledCoordinates, redrawCanvas } = useCanvas(canvasRef);
   const [originalImage, setOriginalImage] = useState<HTMLImageElement | null>(null);
 
+  const getFaceLandmarksPoints = useCallback((landmarks: faceapi.FaceLandmarks68) => {
+    // Get jaw line points
+    const jawPoints = landmarks.getJawOutline();
+    
+    // Get points above the eyebrows including extended forehead
+    const foreheadPoints = getExtendedForeheadPoints(landmarks);
+    
+    // Combine all points to create a complete face outline
+    return [
+      ...jawPoints,
+      ...foreheadPoints.reverse()
+    ].map(pt => ({ x: pt.x, y: pt.y }));
+  }, []);
+
   const redrawScene = useCallback(async () => {
     if (!canvasRef.current || !originalImage) return;
     const ctx = canvasRef.current.getContext('2d');
@@ -24,16 +38,16 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({ image }) => {
     // First, clear the canvas and draw the original image
     await redrawCanvas(originalImage);
 
-    // Then apply all existing blur effects
+    // Then apply all existing blur effects and outlines
     detections.forEach((face, index) => {
-      const { box } = face.detection;
+      const landmarks = getFaceLandmarksPoints(face.landmarks);
       if (blurredFaces.has(index)) {
-        applyBlur(ctx, box.x, box.y, box.width, box.height);
+        applyBlur(ctx, landmarks);
       } else {
-        drawFaceOutline(ctx, box.x, box.y, box.width, box.height);
+        drawFaceOutline(ctx, landmarks);
       }
     });
-  }, [originalImage, detections, blurredFaces, redrawCanvas]);
+  }, [originalImage, detections, blurredFaces, redrawCanvas, getFaceLandmarksPoints]);
 
   useEffect(() => {
     const initializeCanvas = async () => {
@@ -53,38 +67,43 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({ image }) => {
       // Initial draw of face outlines
       faces.forEach((face, index) => {
         if (!blurredFaces.has(index)) {
-          drawFaceOutline(ctx, face.detection.box.x, face.detection.box.y, 
-            face.detection.box.width, face.detection.box.height);
+          const landmarks = getFaceLandmarksPoints(face.landmarks);
+          drawFaceOutline(ctx, landmarks);
         }
       });
     };
 
     initializeCanvas();
-  }, [image, setupCanvas]);
+  }, [image, setupCanvas, getFaceLandmarksPoints]);
 
   useEffect(() => {
     redrawScene();
   }, [blurredFaces, redrawScene]);
 
+  const isPointInPath = (ctx: CanvasRenderingContext2D, x: number, y: number, landmarks: { x: number; y: number }[]) => {
+    ctx.beginPath();
+    ctx.moveTo(landmarks[0].x, landmarks[0].y);
+    for (let i = 1; i < landmarks.length; i++) {
+      ctx.lineTo(landmarks[i].x, landmarks[i].y);
+    }
+    ctx.closePath();
+    return ctx.isPointInPath(x, y);
+  };
+
   const handleCanvasClick = async (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || !detections.length || !originalImage) return;
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
 
     const { x, y } = getScaledCoordinates(e);
 
     detections.forEach((face, index) => {
-      const { box } = face.detection;
-      if (
-        x >= box.x &&
-        x <= box.x + box.width &&
-        y >= box.y &&
-        y <= box.y + box.height
-      ) {
+      const landmarks = getFaceLandmarksPoints(face.landmarks);
+      if (isPointInPath(ctx, x, y, landmarks)) {
         const newBlurredFaces = new Set(blurredFaces);
         if (blurredFaces.has(index)) {
-          // Remove blur if already blurred
           newBlurredFaces.delete(index);
         } else {
-          // Add blur if not blurred
           newBlurredFaces.add(index);
         }
         setBlurredFaces(newBlurredFaces);
